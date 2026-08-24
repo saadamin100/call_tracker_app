@@ -10,8 +10,8 @@ st.title("📞 Call Log & Fraud Detection Tracker (Google Sheets Integrated)")
 # Initialize Google Sheets Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-DEFAULT_STARTING_BALANCE = 600.0
-DEFAULT_RATE_PER_MIN = 0.60
+DEFAULT_STARTING_BALANCE = 650.0
+DEFAULT_RATE_PER_MIN = 0.15
 
 if "approved_leads" not in st.session_state:
     st.session_state.approved_leads = set()
