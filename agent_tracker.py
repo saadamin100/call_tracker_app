@@ -1,22 +1,20 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Call Log & Fraud Detection Tracker", layout="wide", page_icon="📞")
 
-st.title("📞 Call Log & Fraud Detection Tracker")
-st.markdown("Upload your approved Lead List (Excel/CSV), track agent call durations, and automatically detect fraud or unapproved calls.")
+st.title("📞 Call Log & Fraud Detection Tracker (Google Sheets Integrated)")
 
-# Default settings
+# Initialize Google Sheets Connection
+conn = st.connection("gsheets", type=GSheetsConnection)
+
 DEFAULT_STARTING_BALANCE = 600.0
 DEFAULT_RATE_PER_MIN = 0.60
 
-# Initialize Session State Variables
 if "approved_leads" not in st.session_state:
     st.session_state.approved_leads = set()
-
-if "logs" not in st.session_state:
-    st.session_state.logs = []
 
 # --- SIDEBAR CONFIGURATION ---
 st.sidebar.header("⚙️ Settings & Configuration")
@@ -29,49 +27,38 @@ uploaded_file = st.sidebar.file_uploader("Upload Excel or CSV file", type=["csv"
 
 if uploaded_file is not None:
     try:
-        if uploaded_file.name.endswith('.csv'):
-            df_leads = pd.read_csv(uploaded_file)
-        else:
-            df_leads = pd.read_excel(uploaded_file)
-        
-        # Display column selection if multiple columns exist
+        df_leads = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
         col_names = list(df_leads.columns)
         selected_col = st.sidebar.selectbox("Select Phone Number Column", options=col_names)
         
         if selected_col:
-            # Clean and normalize phone numbers (remove spaces, dashes, decimals)
             raw_numbers = df_leads[selected_col].dropna().astype(str).tolist()
-            cleaned_numbers = {
+            st.session_state.approved_leads = {
                 str(num).strip().replace(".0", "").replace("-", "").replace(" ", "").replace("+92", "0")
                 for num in raw_numbers
             }
-            st.session_state.approved_leads = cleaned_numbers
-            st.sidebar.success(f"✅ Loaded {len(cleaned_numbers)} unique lead numbers!")
+            st.sidebar.success(f"✅ Loaded {len(st.session_state.approved_leads)} unique lead numbers!")
     except Exception as e:
         st.sidebar.error(f"Error loading file: {e}")
 
-# Display Loaded Leads Summary in Sidebar
-if st.session_state.approved_leads:
-    st.sidebar.info(f"📋 Total Active Approved Leads: **{len(st.session_state.approved_leads)}**")
-else:
-    st.sidebar.warning("⚠️ No Lead List uploaded yet. All calls will be flagged as unapproved until uploaded.")
+# --- FETCH EXISTING LOGS FROM GOOGLE SHEET ---
+try:
+    existing_logs = conn.read(ttl="0") # Live fetch without cache
+    existing_logs = existing_logs.dropna(how="all")
+except Exception:
+    existing_logs = pd.DataFrame()
 
-# --- METRICS & CALCULATIONS ---
-if st.session_state.logs:
-    df_logs = pd.DataFrame(st.session_state.logs)
-    total_spent = df_logs["Cost (PKR)"].sum()
-    total_mins = df_logs["Duration (Mins)"].sum()
-    fraud_calls = len(df_logs[df_logs["Is Fraud"] == True])
-    valid_calls = len(df_logs[df_logs["Is Fraud"] == False])
+if not existing_logs.empty and "Cost (PKR)" in existing_logs.columns:
+    total_spent = pd.to_numeric(existing_logs["Cost (PKR)"], errors='coerce').sum()
+    total_mins = pd.to_numeric(existing_logs["Duration (Mins)"], errors='coerce').sum()
+    fraud_calls = len(existing_logs[existing_logs["Status"].astype(str).str.contains("FRAUD")])
+    valid_calls = len(existing_logs) - fraud_calls
 else:
-    total_spent = 0.0
-    total_mins = 0
-    fraud_calls = 0
-    valid_calls = 0
+    total_spent, total_mins, fraud_calls, valid_calls = 0.0, 0, 0, 0
 
 remaining_balance = starting_balance - total_spent
 
-# Top KPI Dashboard Cards
+# Top KPI Cards
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Remaining Balance", f"PKR {remaining_balance:.2f}", delta=f"-{total_spent:.2f} PKR spent" if total_spent > 0 else None, delta_color="inverse")
 c2.metric("Total Spent", f"PKR {total_spent:.2f}")
@@ -88,18 +75,15 @@ with st.form("call_entry_form", clear_on_submit=True):
     duration_input = col_b.number_input("Call Duration (Minutes)", min_value=1, value=3, step=1)
     agent_input = col_c.text_input("Agent Name", value="Agent 1")
     
-    submit_btn = st.form_submit_button("Submit & Deduct Balance")
+    submit_btn = st.form_submit_button("Submit & Save to Google Sheets")
     
     if submit_btn:
         if phone_input:
-            # Normalize input phone number
             clean_input = phone_input.strip().replace("-", "").replace(" ", "").replace("+92", "0")
             cost = duration_input * rate_per_min
-            
-            # Check against approved lead list
             is_fraud = clean_input not in st.session_state.approved_leads
             
-            log_entry = {
+            new_row = pd.DataFrame([{
                 "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "Agent Name": agent_input,
                 "Phone Number": clean_input,
@@ -107,27 +91,22 @@ with st.form("call_entry_form", clear_on_submit=True):
                 "Cost (PKR)": round(cost, 2),
                 "Status": "🚨 UNAPPROVED / FRAUD" if is_fraud else "✅ VALID LEAD CALL",
                 "Is Fraud": is_fraud
-            }
+            }])
             
-            st.session_state.logs.append(log_entry)
+            # Append new row directly to Google Sheets
+            updated_df = pd.concat([existing_logs, new_row], ignore_index=True)
+            conn.update(data=updated_df)
+            
+            st.success("✅ Entry recorded permanently in Google Sheet!")
             st.rerun()
         else:
             st.warning("Please enter a phone number.")
 
-# --- DATA TABLE & HIGHLIGHTING ---
-if st.session_state.logs:
-    st.subheader("📋 Real-time Call Log History")
-    df_display = pd.DataFrame(st.session_state.logs)
-    
-    # Custom Row Styling: Highlight Fraud in Light Red
+# --- DATA TABLE DISPLAY ---
+if not existing_logs.empty:
+    st.subheader("📋 Permanent Call History (From Google Sheets)")
     def highlight_status(val):
-        if "FRAUD" in str(val):
-            return 'background-color: #ffcccc; color: #900c3f; font-weight: bold;'
-        return 'background-color: #e8f8f5; color: #117a65;'
-
-    styled_df = df_display.style.applymap(highlight_status, subset=['Status'])
-    st.dataframe(styled_df, use_container_width=True)
+        return 'background-color: #ffcccc; color: #900c3f; font-weight: bold;' if "FRAUD" in str(val) else 'background-color: #e8f8f5; color: #117a65;'
     
-    # Download Log Button
-    csv_data = df_display.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Export Call Logs as CSV", csv_data, "call_logs_export.csv", "text/csv")
+    styled_df = existing_logs.style.applymap(highlight_status, subset=['Status'])
+    st.dataframe(styled_df, use_container_width=True)
