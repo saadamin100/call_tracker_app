@@ -43,7 +43,6 @@ if uploaded_file is not None:
 
 # --- FETCH EXISTING LOGS FROM GOOGLE SHEET ---
 try:
-    # Read sheet data
     existing_logs = conn.read(worksheet="Sheet1", ttl="0")
     existing_logs = existing_logs.dropna(how="all")
 except Exception:
@@ -82,7 +81,15 @@ with st.form("call_entry_form", clear_on_submit=True):
         if phone_input:
             clean_input = phone_input.strip().replace("-", "").replace(" ", "").replace("+92", "0")
             cost = duration_input * rate_per_min
-            is_fraud = clean_input not in st.session_state.approved_leads
+            
+            # Smart Fraud Check Logic
+            if len(st.session_state.approved_leads) > 0:
+                is_fraud = clean_input not in st.session_state.approved_leads
+                status_msg = "🚨 UNAPPROVED / FRAUD" if is_fraud else "✅ VALID LEAD CALL"
+            else:
+                # Agar CSV upload nahi hui, toh fraud trigger na ho jab tak explicit check na ho
+                is_fraud = False
+                status_msg = "✅ VALID CALL (No Lead Sheet Uploaded)"
             
             new_row = pd.DataFrame([{
                 "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -90,15 +97,13 @@ with st.form("call_entry_form", clear_on_submit=True):
                 "Phone Number": clean_input,
                 "Duration (Mins)": int(duration_input),
                 "Cost (PKR)": float(round(cost, 2)),
-                "Status": "🚨 UNAPPROVED / FRAUD" if is_fraud else "✅ VALID LEAD CALL",
+                "Status": status_msg,
                 "Is Fraud": str(is_fraud)
             }])
             
-            # Merge and push to worksheet
             updated_df = pd.concat([existing_logs, new_row], ignore_index=True)
             
             try:
-                # Specify worksheet="Sheet1" to resolve UnsupportedOperationError
                 conn.update(worksheet="Sheet1", data=updated_df)
                 st.success("✅ Entry recorded permanently in Google Sheet!")
                 st.rerun()
