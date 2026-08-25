@@ -114,5 +114,5 @@ if not existing_logs.empty:
     def highlight_status(val):
         return 'background-color: #ffcccc; color: #900c3f; font-weight: bold;' if "FRAUD" in str(val) else 'background-color: #e8f8f5; color: #117a65;'
     
-    styled_df = existing_logs.style.applymap(highlight_status, subset=['Status'])
+    styled_df = existing_logs.style.map(highlight_status, subset=['Status'])
     st.dataframe(styled_df, use_container_width=True)
