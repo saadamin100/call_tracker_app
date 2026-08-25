@@ -43,14 +43,15 @@ if uploaded_file is not None:
 
 # --- FETCH EXISTING LOGS FROM GOOGLE SHEET ---
 try:
-    existing_logs = conn.read(ttl="0") # Live fetch without cache
+    # Read sheet data
+    existing_logs = conn.read(worksheet="Sheet1", ttl="0")
     existing_logs = existing_logs.dropna(how="all")
 except Exception:
     existing_logs = pd.DataFrame()
 
 if not existing_logs.empty and "Cost (PKR)" in existing_logs.columns:
-    total_spent = pd.to_numeric(existing_logs["Cost (PKR)"], errors='coerce').sum()
-    total_mins = pd.to_numeric(existing_logs["Duration (Mins)"], errors='coerce').sum()
+    total_spent = pd.to_numeric(existing_logs["Cost (PKR)"], errors='coerce').fillna(0).sum()
+    total_mins = int(pd.to_numeric(existing_logs["Duration (Mins)"], errors='coerce').fillna(0).sum())
     fraud_calls = len(existing_logs[existing_logs["Status"].astype(str).str.contains("FRAUD")])
     valid_calls = len(existing_logs) - fraud_calls
 else:
@@ -87,24 +88,29 @@ with st.form("call_entry_form", clear_on_submit=True):
                 "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "Agent Name": agent_input,
                 "Phone Number": clean_input,
-                "Duration (Mins)": duration_input,
-                "Cost (PKR)": round(cost, 2),
+                "Duration (Mins)": int(duration_input),
+                "Cost (PKR)": float(round(cost, 2)),
                 "Status": "🚨 UNAPPROVED / FRAUD" if is_fraud else "✅ VALID LEAD CALL",
-                "Is Fraud": is_fraud
+                "Is Fraud": str(is_fraud)
             }])
             
-            # Append new row directly to Google Sheets
+            # Merge and push to worksheet
             updated_df = pd.concat([existing_logs, new_row], ignore_index=True)
-            conn.update(data=updated_df)
             
-            st.success("✅ Entry recorded permanently in Google Sheet!")
-            st.rerun()
+            try:
+                # Specify worksheet="Sheet1" to resolve UnsupportedOperationError
+                conn.update(worksheet="Sheet1", data=updated_df)
+                st.success("✅ Entry recorded permanently in Google Sheet!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to update Google Sheet: {e}")
         else:
             st.warning("Please enter a phone number.")
 
 # --- DATA TABLE DISPLAY ---
 if not existing_logs.empty:
     st.subheader("📋 Permanent Call History (From Google Sheets)")
+    
     def highlight_status(val):
         return 'background-color: #ffcccc; color: #900c3f; font-weight: bold;' if "FRAUD" in str(val) else 'background-color: #e8f8f5; color: #117a65;'
     
