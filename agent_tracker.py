@@ -72,7 +72,9 @@ st.subheader("📝 Enter Completed Call Record")
 with st.form("call_entry_form", clear_on_submit=True):
     col_a, col_b, col_c = st.columns(3)
     phone_input = col_a.text_input("Phone Number Dialed (e.g., 03001234567)")
-    duration_input = col_b.number_input("Call Duration (Minutes)", min_value=1, value=3, step=1)
+    
+    # min_value=0 rakha hai taake unanswered calls zero duration par enter ho sakein
+    duration_input = col_b.number_input("Call Duration (Minutes)", min_value=0, value=0, step=1)
     agent_input = col_c.text_input("Agent Name", value="Agent 1")
     
     submit_btn = st.form_submit_button("Submit & Save to Google Sheets")
@@ -80,16 +82,20 @@ with st.form("call_entry_form", clear_on_submit=True):
     if submit_btn:
         if phone_input:
             clean_input = phone_input.strip().replace("-", "").replace(" ", "").replace("+92", "0")
-            cost = duration_input * rate_per_min
             
-            # Smart Fraud Check Logic
+            # Duration 0 hone par cost zero rahegi aur balance nahi katega
+            cost = duration_input * rate_per_min if duration_input > 0 else 0.0
+            
+            # Fraud check logic
             if len(st.session_state.approved_leads) > 0:
                 is_fraud = clean_input not in st.session_state.approved_leads
-                status_msg = "🚨 UNAPPROVED / FRAUD" if is_fraud else "✅ VALID LEAD CALL"
+                if is_fraud:
+                    status_msg = "🚨 UNAPPROVED / FRAUD"
+                else:
+                    status_msg = "🚫 NO ANSWER / MISSED" if duration_input == 0 else "✅ VALID LEAD CALL"
             else:
-                # Agar CSV upload nahi hui, toh fraud trigger na ho jab tak explicit check na ho
                 is_fraud = False
-                status_msg = "✅ VALID CALL (No Lead Sheet Uploaded)"
+                status_msg = "🚫 NO ANSWER / MISSED" if duration_input == 0 else "✅ VALID CALL"
             
             new_row = pd.DataFrame([{
                 "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -117,7 +123,12 @@ if not existing_logs.empty:
     st.subheader("📋 Permanent Call History (From Google Sheets)")
     
     def highlight_status(val):
-        return 'background-color: #ffcccc; color: #900c3f; font-weight: bold;' if "FRAUD" in str(val) else 'background-color: #e8f8f5; color: #117a65;'
+        if "FRAUD" in str(val):
+            return 'background-color: #ffcccc; color: #900c3f; font-weight: bold;'
+        elif "NO ANSWER" in str(val):
+            return 'background-color: #fff3cd; color: #856404; font-weight: bold;'
+        else:
+            return 'background-color: #e8f8f5; color: #117a65;'
     
     styled_df = existing_logs.style.map(highlight_status, subset=['Status'])
     st.dataframe(styled_df, use_container_width=True)
